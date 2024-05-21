@@ -1,5 +1,4 @@
 import os
-import re
 from functools import cached_property
 from pathlib import Path
 from typing import Annotated
@@ -7,15 +6,19 @@ from typing import Annotated
 from annocli import Namespace, cli
 
 _PROCFS = Path("/proc")
-_PID_REGEX = re.compile("^[0-9]+$")
-_PPID_REGEX = re.compile(r"PPid:[ \t]*([0-9]+)")
-_NAME_REGEX = re.compile(r"Name:[ \t]*([^ \t].+)")
 
 
 class Args(Namespace):
     pattern: Annotated[str, "pattern"]
     threads: Annotated[bool, "-T"]
     truncate: Annotated[int, "-t"] = 0
+    show_cwd: Annotated[bool, "-w"]
+
+
+@cli
+def main(args: Args):
+    for p in list_processes(args):
+        p.print_matching()
 
 
 class Thread:
@@ -26,64 +29,90 @@ class Thread:
 
 class Process:
     pid: int
-    ppid: int
     children: list
-    name: str
-    cmdline: str
-    matches: bool
-    threads: list[Thread] | None
+    _args: Args
 
     def __init__(self, pid: int, args: Args):
         self.pid = pid
         self.children: list[Process] = []
+        self._args = args
 
-        pdir = _PROCFS / str(pid)
+    @cached_property
+    def pdir(self) -> Path:
+        return _PROCFS / str(self.pid)
 
-        self.ppid = int(_PPID_REGEX.search((pdir / "status").read_text()).group(1))
+    @cached_property
+    def ppid(self) -> int | None:
+        if (ppid := self.attrs.get("PPid")) is None:
+            return None
 
-        cmdline_raw = (pdir / "cmdline").read_bytes()
+        return int(ppid)
 
-        if cmdline_raw:
-            cmdline = [a.decode() for a in cmdline_raw.split(b"\0")]
-            self.name = cmdline.pop(0)
-            cmdline.pop(-1)
+    @cached_property
+    def cmdline_args(self) -> list[str]:
+        if not (raw := (self.pdir / "cmdline").read_bytes()):
+            return []
 
-            if any(" " in a for a in cmdline):
-                self.cmdline = str(cmdline)
-            else:
-                self.cmdline = " ".join(cmdline)
+        return [a.decode() for a in raw.split(b"\0")][:-1]
 
-            if args.truncate > 0:
-                self.cmdline = self.cmdline[: args.truncate]
-            self.matches = any(args.pattern in a for a in [self.name, *cmdline])
+    @cached_property
+    def cmdline(self) -> str:
+        if not (args := self.cmdline_args[1:]):
+            return ""
+
+        if any(" " in a for a in args):
+            cmdline = str(args)
         else:
-            self.name = ""
-            self.cmdline = []
-            self.matches = False
+            cmdline = " ".join(args)
 
-        if args.threads:
-            self.threads = []
-            for e in (pdir / "task").iterdir():
-                tid = int(e.name)
-                if tid == pid:
-                    continue
-                if m := _NAME_REGEX.search((e / "status").read_text()):
-                    self.threads.append(Thread(tid, m.group(1)))
-        else:
-            self.threads = None
+        if self._args.truncate > 0:
+            cmdline = cmdline[: self._args.truncate]
 
-    def print_matching(self, indent="", always_match=False):
-        if not (self.matches or self.children_match or always_match):
-            return
+        return cmdline
 
-        print(f"{indent}[{self.pid}] {self.name} {self.cmdline}")
+    @cached_property
+    def name(self) -> str:
+        return self.cmdline_args[0] if self.cmdline_args else ""
 
-        if self.threads:
-            for t in self.threads:
-                print(f"{indent}  [{t.tid}]{{{t.name}}}")
+    @cached_property
+    def matches(self) -> bool:
+        return any(self._args.pattern in a for a in self.cmdline_args)
 
-        for p in self.children:
-            p.print_matching(indent + "  ", self.matches or always_match)
+    @cached_property
+    def threads(self) -> list[Thread]:
+        if not self._args.threads:
+            return []
+
+        threads = []
+        for e in (self.pdir / "task").iterdir():
+            tid = int(e.name)
+            if tid == self.pid:
+                continue
+            if name := self.read_attrs(e).get("Name"):
+                threads.append(Thread(tid, name))
+
+        return threads
+
+    @cached_property
+    def attrs(self) -> dict[str, str]:
+        return self.read_attrs(self.pdir)
+
+    @cached_property
+    def cwd(self) -> str | None:
+        if not self._args.show_cwd:
+            return None
+
+        try:
+            return (self.pdir / "cwd").readlink()
+        except (PermissionError, FileNotFoundError) as e:
+            return f"!{e}"
+
+    @cached_property
+    def repr(self):
+        if cwd := (self.cwd or ""):
+            cwd = f" ({cwd})"
+
+        return f"[{self.pid}]{cwd} {self.name} {self.cmdline}"
 
     @cached_property
     def children_match(self) -> bool:
@@ -93,16 +122,38 @@ class Process:
 
         return False
 
+    def print_matching(self, indent="", always_match=False):
+        if not (self.matches or self.children_match or always_match):
+            return
+
+        print(f"{indent}{self.repr}")
+        for t in self.threads:
+            print(f"{indent}  [{t.tid}]{{{t.name}}}")
+
+        for p in self.children:
+            p.print_matching(indent + "  ", self.matches or always_match)
+
+    @staticmethod
+    def read_attrs(pdir: Path) -> dict[str, str]:
+        attrs = {}
+        for line in (pdir / "status").read_text().splitlines():
+            attr, val = line.split(":", 1)
+            val = val.lstrip(" \t")
+            attrs[attr] = val
+
+        return attrs
+
 
 def list_processes(args: Args) -> list[Process]:
     processes_by_pid: dict[int, Process] = {}
     self_pid = os.getpid()
 
     for entry in _PROCFS.iterdir():
-        if not _PID_REGEX.match(entry.name):
+        try:
+            pid = int(entry.name)
+        except ValueError:
             continue
 
-        pid = int(entry.name)
         if pid == self_pid:
             continue
 
@@ -119,9 +170,3 @@ def list_processes(args: Args) -> list[Process]:
             processes.append(process)
 
     return processes
-
-
-@cli
-def main(args: Args):
-    for p in list_processes(args):
-        p.print_matching()
