@@ -3,19 +3,19 @@ from functools import cached_property
 from pathlib import Path
 from typing import Annotated
 
-from annocli import Namespace, cli
+from annocli import Arg, Namespace, entrypoint
 
 _PROCFS = Path("/proc")
 
 
 class Args(Namespace):
-    pattern: Annotated[str, "pattern"]
-    threads: Annotated[bool, "-T"]
-    truncate: Annotated[int, "-t"] = 0
-    show_cwd: Annotated[bool, "-w"]
+    pattern: str = Arg(positional=True)
+    threads: bool = Arg("-T")
+    truncate: int = Arg("-t", default=0)
+    show_cwd: bool = Arg("-w")
 
 
-@cli
+@entrypoint
 def main(args: Args):
     for p in list_processes(args):
         p.print_matching()
