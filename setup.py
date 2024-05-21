@@ -5,6 +5,6 @@ setup(
     python_requires=">=3.10",
     packages=find_packages(),
     entry_points={
-        "console_scripts": ["pypst = pst:main"],
+        "console_scripts": ["pst = pst:main"],
     },
 )
