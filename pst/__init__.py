@@ -73,7 +73,10 @@ def list_processes(args: Args) -> list[Process]:
         if pid == self_pid:
             continue
 
-        processes_by_pid[pid] = Process(pid, args)
+        try:
+            processes_by_pid[pid] = Process(pid, args)
+        except FileNotFoundError:
+            pass
 
     processes = []
     for process in list(processes_by_pid.values()):
