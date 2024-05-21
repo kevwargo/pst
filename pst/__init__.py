@@ -4,16 +4,24 @@ from functools import cached_property
 from pathlib import Path
 from typing import Annotated
 
-from decocli import Namespace, cli
+from annocli import Namespace, cli
 
 _PROCFS = Path("/proc")
 _PID_REGEX = re.compile("^[0-9]+$")
 _PPID_REGEX = re.compile(r"PPid:[ \t]*([0-9]+)")
+_NAME_REGEX = re.compile(r"Name:[ \t]*([^ \t].+)")
 
 
 class Args(Namespace):
-    pattern: Annotated[str, "-p"]
+    pattern: Annotated[str, "pattern"]
+    threads: Annotated[bool, "-T"]
     truncate: Annotated[int, "-t"] = 0
+
+
+class Thread:
+    def __init__(self, tid: int, name: str):
+        self.tid = tid
+        self.name = name
 
 
 class Process:
@@ -23,6 +31,7 @@ class Process:
     name: str
     cmdline: str
     matches: bool
+    threads: list[Thread] | None
 
     def __init__(self, pid: int, args: Args):
         self.pid = pid
@@ -32,23 +41,47 @@ class Process:
 
         self.ppid = int(_PPID_REGEX.search((pdir / "status").read_text()).group(1))
 
-        cmdline = [a.decode() for a in (pdir / "cmdline").read_bytes().split(b"\0")]
-        self.name = cmdline.pop(0)
-        if any(" " in a for a in cmdline):
-            self.cmdline = str(cmdline)
+        cmdline_raw = (pdir / "cmdline").read_bytes()
+
+        if cmdline_raw:
+            cmdline = [a.decode() for a in cmdline_raw.split(b"\0")]
+            self.name = cmdline.pop(0)
+            cmdline.pop(-1)
+
+            if any(" " in a for a in cmdline):
+                self.cmdline = str(cmdline)
+            else:
+                self.cmdline = " ".join(cmdline)
+
+            if args.truncate > 0:
+                self.cmdline = self.cmdline[: args.truncate]
+            self.matches = any(args.pattern in a for a in [self.name, *cmdline])
         else:
-            self.cmdline = " ".join(cmdline)
+            self.name = ""
+            self.cmdline = []
+            self.matches = False
 
-        if args.truncate > 0:
-            self.cmdline = self.cmdline[: args.truncate]
-
-        self.matches = any(args.pattern in a for a in [self.name, *cmdline])
+        if args.threads:
+            self.threads = []
+            for e in (pdir / "task").iterdir():
+                tid = int(e.name)
+                if tid == pid:
+                    continue
+                if m := _NAME_REGEX.search((e / "status").read_text()):
+                    self.threads.append(Thread(tid, m.group(1)))
+        else:
+            self.threads = None
 
     def print_matching(self, indent="", always_match=False):
         if not (self.matches or self.children_match or always_match):
             return
 
         print(f"{indent}[{self.pid}] {self.name} {self.cmdline}")
+
+        if self.threads:
+            for t in self.threads:
+                print(f"{indent}  [{t.tid}]{{{t.name}}}")
+
         for p in self.children:
             p.print_matching(indent + "  ", self.matches or always_match)
 
