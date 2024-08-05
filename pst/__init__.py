@@ -166,7 +166,7 @@ def list_processes(args: Args) -> list[Process]:
         processes_by_pid[pid] = Process(pid, args)
 
     processes = []
-    for process in list(processes_by_pid.values()):
+    for process in processes_by_pid.values():
         try:
             if ppid := process.ppid:
                 processes_by_pid[ppid].children.append(process)
@@ -174,5 +174,8 @@ def list_processes(args: Args) -> list[Process]:
                 processes.append(process)
         except FileNotFoundError:
             pass
+
+    for process in processes_by_pid.values():
+        process.children.sort(key=lambda c: len(c.children) + len(c.threads))
 
     return processes
