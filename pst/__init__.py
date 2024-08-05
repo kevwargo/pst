@@ -1,7 +1,6 @@
 import os
 from functools import cached_property
 from pathlib import Path
-from typing import Annotated
 
 from annocli import Arg, Namespace, entrypoint
 
@@ -84,18 +83,21 @@ class Process:
             return []
 
         threads = []
-        for e in (self.pdir / "task").iterdir():
-            tid = int(e.name)
+        for tdir in (self.pdir / "task").iterdir():
+            tid = int(tdir.name)
             if tid == self.pid:
                 continue
-            if name := self.read_attrs(e).get("Name"):
-                threads.append(Thread(tid, name))
+            try:
+                if name := self.read_attrs(tdir).get("Name"):
+                    threads.append(Thread(tid, name))
+            except FileNotFoundError:
+                pass
 
         return threads
 
     @cached_property
     def attrs(self) -> dict[str, str]:
-        return self.read_attrs(self.pdir)
+        return self.read_attrs()
 
     @cached_property
     def cwd(self) -> str | None:
@@ -123,20 +125,22 @@ class Process:
         return False
 
     def print_matching(self, indent="", always_match=False):
-        if not (self.matches or self.children_match or always_match):
-            return
+        try:
+            if not (self.matches or self.children_match or always_match):
+                return
 
-        print(f"{indent}{self.repr}")
-        for t in self.threads:
-            print(f"{indent}  [{t.tid}]{{{t.name}}}")
+            print(f"{indent}{self.repr}")
+            for t in self.threads:
+                print(f"{indent}  [{t.tid}]{{{t.name}}}")
 
-        for p in self.children:
-            p.print_matching(indent + "  ", self.matches or always_match)
+            for p in self.children:
+                p.print_matching(indent + "  ", self.matches or always_match)
+        except FileNotFoundError:
+            pass
 
-    @staticmethod
-    def read_attrs(pdir: Path) -> dict[str, str]:
+    def read_attrs(self, pdir: Path | None = None) -> dict[str, str]:
         attrs = {}
-        for line in (pdir / "status").read_text().splitlines():
+        for line in ((pdir or self.pdir) / "status").read_text().splitlines():
             attr, val = line.split(":", 1)
             val = val.lstrip(" \t")
             attrs[attr] = val
@@ -157,16 +161,16 @@ def list_processes(args: Args) -> list[Process]:
         if pid == self_pid:
             continue
 
-        try:
-            processes_by_pid[pid] = Process(pid, args)
-        except FileNotFoundError:
-            pass
+        processes_by_pid[pid] = Process(pid, args)
 
     processes = []
     for process in list(processes_by_pid.values()):
-        if ppid := process.ppid:
-            processes_by_pid[ppid].children.append(process)
-        else:
-            processes.append(process)
+        try:
+            if ppid := process.ppid:
+                processes_by_pid[ppid].children.append(process)
+            else:
+                processes.append(process)
+        except FileNotFoundError:
+            pass
 
     return processes
