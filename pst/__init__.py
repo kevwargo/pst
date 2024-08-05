@@ -64,9 +64,6 @@ class Process:
         else:
             cmdline = " ".join(args)
 
-        if self._args.truncate > 0:
-            cmdline = cmdline[: self._args.truncate]
-
         return cmdline
 
     @cached_property
@@ -114,7 +111,12 @@ class Process:
         if cwd := (self.cwd or ""):
             cwd = f" ({cwd})"
 
-        return f"[{self.pid}]{cwd} {self.name} {self.cmdline}"
+        proc_str = f"[{self.pid}]{cwd} {self.name} {self.cmdline}"
+
+        if self._args.truncate > 0:
+            proc_str = proc_str[: self._args.truncate]
+
+        return proc_str
 
     @cached_property
     def children_match(self) -> bool:
