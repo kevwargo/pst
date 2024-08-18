@@ -72,7 +72,7 @@ class Process:
 
     @cached_property
     def matches(self) -> bool:
-        return any(self._args.pattern in a for a in self.cmdline_args)
+        return any(self._args.pattern in a for a in (str(self.pid), *self.cmdline_args))
 
     @cached_property
     def threads(self) -> list[Thread]:
