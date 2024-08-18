@@ -12,6 +12,8 @@ class Args(Namespace):
     threads: bool = Arg("-T")
     truncate: int = Arg("-t", default=0)
     show_cwd: bool = Arg("-w")
+    show_uid: bool = Arg("-u")
+    show_gid: bool = Arg("-g")
 
 
 @entrypoint
@@ -113,11 +115,39 @@ class Process:
             return f"!{e}"
 
     @cached_property
+    def uid(self) -> str:
+        if not self._args.show_uid:
+            return ""
+
+        return self.normalize_guids(self.attrs["Uid"])
+
+    @cached_property
+    def gid(self) -> str:
+        if not self._args.show_gid:
+            return ""
+
+        return self.normalize_guids(self.attrs["Gid"])
+
+    @staticmethod
+    def normalize_guids(raw: str) -> str:
+        guids = raw.split()
+        if len(set(guids)) == 1:
+            return guids[0]
+
+        return f"r:{guids[0]} e:{guids[1]} ss:{guids[2]} fs:{guids[3]}"
+
+    @cached_property
     def repr(self):
         if cwd := (self.cwd or ""):
             cwd = f" ({cwd})"
 
-        proc_str = f"[{self.pid}]{cwd} {self.name} {self.cmdline}"
+        guids = self.uid
+        if gid := self.gid:
+            guids += f" : {gid}"
+        if guids:
+            guids = f"[{guids}]"
+
+        proc_str = f"[{self.pid}]{guids}{cwd} {self.name} {self.cmdline}"
 
         if self._args.truncate > 0:
             proc_str = proc_str[: self._args.truncate]
