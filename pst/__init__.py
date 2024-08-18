@@ -68,7 +68,13 @@ class Process:
 
     @cached_property
     def name(self) -> str:
-        return self.cmdline_args[0] if self.cmdline_args else ""
+        if self.cmdline_args:
+            return self.cmdline_args[0]
+
+        try:
+            return f'*{self.attrs.get("Name")}*' or ""
+        except FileNotFoundError:
+            return ""
 
     @cached_property
     def matches(self) -> bool:
