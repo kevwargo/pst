@@ -14,6 +14,7 @@ class Args(Namespace):
     show_cwd: bool = Arg("-w")
     show_uid: bool = Arg("-u")
     show_gid: bool = Arg("-g")
+    show_basic_fds: bool = Arg("-F")
 
 
 @entrypoint
@@ -128,6 +129,21 @@ class Process:
 
         return self.normalize_guids(self.attrs["Gid"])
 
+    @cached_property
+    def fd_lines(self) -> list[str]:
+        if not self._args.show_basic_fds:
+            return []
+
+        lines = []
+        for fd in (0, 1, 2):
+            try:
+                fd_path = (self.pdir / "fd" / str(fd)).readlink()
+            except (PermissionError, FileNotFoundError) as e:
+                fd_path = f"!{e}"
+            lines.append(f"{fd} -> {fd_path}")
+
+        return lines
+
     @staticmethod
     def normalize_guids(raw: str) -> str:
         guids = raw.split()
@@ -136,8 +152,7 @@ class Process:
 
         return f"r:{guids[0]} e:{guids[1]} ss:{guids[2]} fs:{guids[3]}"
 
-    @cached_property
-    def repr(self):
+    def repr(self, indent: str):
         if cwd := (self.cwd or ""):
             cwd = f" ({cwd})"
 
@@ -152,7 +167,10 @@ class Process:
         if self._args.truncate > 0:
             proc_str = proc_str[: self._args.truncate]
 
-        return proc_str
+        for fd_line in self.fd_lines:
+            proc_str += f"\n{indent}    {fd_line}"
+
+        return f"{indent}{proc_str}"
 
     @cached_property
     def children_match(self) -> bool:
@@ -167,7 +185,7 @@ class Process:
             if not (self.matches or self.children_match or always_match):
                 return
 
-            print(f"{indent}{self.repr}")
+            print(self.repr(indent))
             for t in self.threads:
                 print(f"{indent}  [{t.tid}]{{{t.name}}}")
 
