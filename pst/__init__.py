@@ -1,10 +1,13 @@
 import os
+import re
 from functools import cached_property
 from pathlib import Path
 
 from annocli import Arg, Namespace, entrypoint
 
 _PROCFS = Path("/proc")
+
+_PGRP_REGEXP = re.compile(r".*\) [a-zA-Z] [0-9]+ ([0-9]+)")
 
 
 class Args(Namespace):
@@ -15,6 +18,7 @@ class Args(Namespace):
     show_uid: bool = Arg("-u")
     show_gid: bool = Arg("-g")
     show_basic_fds: bool = Arg("-F")
+    show_process_groups: bool = Arg("-G")
 
 
 @entrypoint
@@ -78,6 +82,16 @@ class Process:
             return f'*{self.attrs.get("Name")}*' or ""
         except FileNotFoundError:
             return ""
+
+    @cached_property
+    def pgroup(self) -> str:
+        try:
+            if self._args.show_process_groups and (m := _PGRP_REGEXP.search((self.pdir / "stat").read_text())):
+                return m.group(1)
+        except FileExistsError:
+            pass
+
+        return ""
 
     @cached_property
     def matches(self) -> bool:
@@ -162,7 +176,11 @@ class Process:
         if guids:
             guids = f"[{guids}]"
 
-        proc_str = f"[{self.pid}]{guids}{cwd} {self.name} {self.cmdline}"
+        process_ids = str(self.pid)
+        if self.pgroup:
+            process_ids += f";{self.pgroup}"
+
+        proc_str = f"[{process_ids}]{guids}{cwd} {self.name} {self.cmdline}"
 
         if self._args.truncate > 0:
             proc_str = proc_str[: self._args.truncate]
