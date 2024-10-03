@@ -108,8 +108,7 @@ class Process:
             if tid == self.pid:
                 continue
             try:
-                if name := self.read_attrs(tdir).get("Name"):
-                    threads.append(Thread(tid, name))
+                threads.append(Thread(tid, self.read_attrs(tdir).get("Name") or ""))
             except FileNotFoundError:
                 pass
 
