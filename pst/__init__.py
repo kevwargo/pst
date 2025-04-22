@@ -12,6 +12,7 @@ _PGRP_REGEXP = re.compile(r".*\) [a-zA-Z] [0-9]+ ([0-9]+)")
 
 class Args(Namespace):
     pattern: str = Arg(positional=True)
+    full_match: bool = Arg("-f")
     threads: bool = Arg("-T")
     truncate: int = Arg("-t", default=0)
     show_cwd: bool = Arg("-w")
@@ -23,7 +24,7 @@ class Args(Namespace):
 
 @entrypoint
 def main(args: Args):
-    for p in list_processes(args):
+    for p in list_toplevel_processes(args):
         p.print_matching()
 
 
@@ -63,15 +64,14 @@ class Process:
 
     @cached_property
     def cmdline(self) -> str:
-        if not (args := self.cmdline_args[1:]):
-            return ""
+        args = self.cmdline_args[1:]
 
         if any(" " in a for a in args):
             cmdline = str(args)
         else:
             cmdline = " ".join(args)
 
-        return cmdline
+        return f"{self.name} {cmdline}"
 
     @cached_property
     def name(self) -> str:
@@ -95,6 +95,9 @@ class Process:
 
     @cached_property
     def matches(self) -> bool:
+        if self._args.full_match:
+            return self._args.pattern in self.cmdline
+
         return any(self._args.pattern in a for a in (str(self.pid), *self.cmdline_args))
 
     @cached_property
@@ -179,7 +182,7 @@ class Process:
         if self.pgroup:
             process_ids += f";{self.pgroup}"
 
-        proc_str = f"[{process_ids}]{guids}{cwd} {self.name} {self.cmdline}"
+        proc_str = f"[{process_ids}]{guids}{cwd} {self.cmdline}"
 
         if self._args.truncate > 0:
             proc_str = proc_str[: self._args.truncate]
@@ -221,7 +224,7 @@ class Process:
         return attrs
 
 
-def list_processes(args: Args) -> list[Process]:
+def list_toplevel_processes(args: Args) -> list[Process]:
     processes_by_pid: dict[int, Process] = {}
     self_pid = os.getpid()
 
@@ -236,17 +239,17 @@ def list_processes(args: Args) -> list[Process]:
 
         processes_by_pid[pid] = Process(pid, args)
 
-    processes = []
+    toplevel_processes = []
     for process in processes_by_pid.values():
         try:
             if ppid := process.ppid:
                 processes_by_pid[ppid].children.append(process)
             else:
-                processes.append(process)
+                toplevel_processes.append(process)
         except FileNotFoundError:
             pass
 
     for process in processes_by_pid.values():
         process.children.sort(key=lambda c: len(c.children) + len(c.threads))
 
-    return processes
+    return toplevel_processes
